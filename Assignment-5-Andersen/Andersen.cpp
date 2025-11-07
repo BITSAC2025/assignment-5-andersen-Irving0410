@@ -34,25 +34,36 @@ int main(int argc, char** argv)
 
 void Andersen::runPointerAnalysis()
 {
+    std::cout << "=== Starting Andersen Pointer Analysis ===" << std::endl;
+    
     // Initialize worklist with all constraint edges
     WorkList<SVF::ConstraintEdge*> worklist;
     
     // Add all constraint edges to worklist
+    int edgeCount = 0;
     for (auto it = consg->begin(); it != consg->end(); ++it)
     {
         SVF::ConstraintNode* node = it->second;
         for (auto edge : node->getOutEdges())
         {
             worklist.push(edge);
+            edgeCount++;
         }
     }
+    std::cout << "Initial worklist size: " << edgeCount << " edges" << std::endl;
     
     // Process worklist until empty
+    int iteration = 0;
     while (!worklist.empty())
     {
+        iteration++;
         SVF::ConstraintEdge* edge = worklist.pop();
         SVF::ConstraintNode* src = edge->getSrcNode();
         SVF::ConstraintNode* dst = edge->getDstNode();
+        
+        std::cout << "\n[Iteration " << iteration << "] Processing edge: " 
+                  << src->getId() << " -> " << dst->getId() 
+                  << " (Type: " << edge->getEdgeKind() << ")" << std::endl;
         
         // Handle different types of constraints
         switch (edge->getEdgeKind())
@@ -64,16 +75,26 @@ void Andersen::runPointerAnalysis()
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
+                std::cout << "  Address-of constraint: " << srcId << " = &" << dstId << std::endl;
+                
                 if (pts[srcId].insert(dstId).second)
                 {
+                    std::cout << "  Added " << dstId << " to pts[" << srcId << "]" << std::endl;
                     // Points-to set changed, propagate to copy edges
+                    int copyCount = 0;
                     for (auto copyEdge : src->getOutEdges())
                     {
                         if (copyEdge->getEdgeKind() == SVF::ConstraintEdge::Copy)
                         {
                             worklist.push(copyEdge);
+                            copyCount++;
                         }
                     }
+                    std::cout << "  Propagated to " << copyCount << " copy edges" << std::endl;
+                }
+                else
+                {
+                    std::cout << "  No change - " << dstId << " already in pts[" << srcId << "]" << std::endl;
                 }
                 break;
             }
@@ -84,29 +105,53 @@ void Andersen::runPointerAnalysis()
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
+                std::cout << "  Copy constraint: " << srcId << " = " << dstId << std::endl;
+                
                 bool changed = false;
+                int addedCount = 0;
                 if (pts.find(dstId) != pts.end())
                 {
+                    std::cout << "  pts[" << dstId << "] = {";
+                    for (auto pointee : pts[dstId])
+                    {
+                        std::cout << pointee << " ";
+                    }
+                    std::cout << "}" << std::endl;
+                    
                     for (auto pointee : pts[dstId])
                     {
                         if (pts[srcId].insert(pointee).second)
                         {
                             changed = true;
+                            addedCount++;
+                            std::cout << "  Added " << pointee << " to pts[" << srcId << "]" << std::endl;
                         }
                     }
+                }
+                else
+                {
+                    std::cout << "  pts[" << dstId << "] is empty" << std::endl;
                 }
                 
                 if (changed)
                 {
+                    std::cout << "  Changed: added " << addedCount << " elements" << std::endl;
                     // Propagate to load and store edges
+                    int propagateCount = 0;
                     for (auto outEdge : src->getOutEdges())
                     {
                         if (outEdge->getEdgeKind() == SVF::ConstraintEdge::Load || 
                             outEdge->getEdgeKind() == SVF::ConstraintEdge::Store)
                         {
                             worklist.push(outEdge);
+                            propagateCount++;
                         }
                     }
+                    std::cout << "  Propagated to " << propagateCount << " load/store edges" << std::endl;
+                }
+                else
+                {
+                    std::cout << "  No change in pts[" << srcId << "]" << std::endl;
                 }
                 break;
             }
@@ -117,70 +162,143 @@ void Andersen::runPointerAnalysis()
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
+                std::cout << "  Load constraint: " << srcId << " = *" << dstId << std::endl;
+                
                 bool changed = false;
+                int addedCount = 0;
                 if (pts.find(dstId) != pts.end())
                 {
+                    std::cout << "  pts[" << dstId << "] = {";
+                    for (auto pointee : pts[dstId])
+                    {
+                        std::cout << pointee << " ";
+                    }
+                    std::cout << "}" << std::endl;
+                    
                     for (auto pointee : pts[dstId])
                     {
                         // Find the object that pointee points to
                         if (pts.find(pointee) != pts.end())
                         {
+                            std::cout << "  pts[" << pointee << "] = {";
+                            for (auto indirectPointee : pts[pointee])
+                            {
+                                std::cout << indirectPointee << " ";
+                            }
+                            std::cout << "}" << std::endl;
+                            
                             for (auto indirectPointee : pts[pointee])
                             {
                                 if (pts[srcId].insert(indirectPointee).second)
                                 {
                                     changed = true;
+                                    addedCount++;
+                                    std::cout << "  Added " << indirectPointee << " to pts[" << srcId << "]" << std::endl;
                                 }
                             }
                         }
+                        else
+                        {
+                            std::cout << "  pts[" << pointee << "] is empty" << std::endl;
+                        }
                     }
+                }
+                else
+                {
+                    std::cout << "  pts[" << dstId << "] is empty" << std::endl;
                 }
                 
                 if (changed)
                 {
+                    std::cout << "  Changed: added " << addedCount << " indirect elements" << std::endl;
                     // Propagate to copy edges
+                    int propagateCount = 0;
                     for (auto copyEdge : src->getOutEdges())
                     {
                         if (copyEdge->getEdgeKind() == SVF::ConstraintEdge::Copy)
                         {
                             worklist.push(copyEdge);
+                            propagateCount++;
                         }
                     }
+                    std::cout << "  Propagated to " << propagateCount << " copy edges" << std::endl;
+                }
+                else
+                {
+                    std::cout << "  No change in pts[" << srcId << "]" << std::endl;
                 }
                 break;
             }
             case SVF::ConstraintEdge::Store:
             {
                 // Store constraint: *a = b
-                // For each object c in a's points-to set, add b to c's points-to set
+                // For each object c in a's points-to set, add b's points-to set to c's points-to set
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
+                std::cout << "  Store constraint: *" << srcId << " = " << dstId << std::endl;
+                
                 bool changed = false;
+                int addedCount = 0;
                 if (pts.find(srcId) != pts.end())
                 {
+                    std::cout << "  pts[" << srcId << "] = {";
                     for (auto pointee : pts[srcId])
                     {
-                        if (pts[pointee].insert(dstId).second)
+                        std::cout << pointee << " ";
+                    }
+                    std::cout << "}" << std::endl;
+                    
+                    for (auto pointee : pts[srcId])
+                    {
+                        if (pts.find(dstId) != pts.end())
                         {
-                            changed = true;
+                            std::cout << "  pts[" << dstId << "] = {";
+                            for (auto targetPointee : pts[dstId])
+                            {
+                                std::cout << targetPointee << " ";
+                            }
+                            std::cout << "}" << std::endl;
+                            
+                            for (auto targetPointee : pts[dstId])
+                            {
+                                if (pts[pointee].insert(targetPointee).second)
+                                {
+                                    changed = true;
+                                    addedCount++;
+                                    std::cout << "  Added " << targetPointee << " to pts[" << pointee << "]" << std::endl;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            std::cout << "  pts[" << dstId << "] is empty" << std::endl;
                         }
                     }
+                }
+                else
+                {
+                    std::cout << "  pts[" << srcId << "] is empty" << std::endl;
                 }
                 
                 if (changed)
                 {
-                    // Propagate to load edges from the stored objects
-                    for (auto pointee : pts[srcId])
+                    std::cout << "  Changed: added " << addedCount << " elements to indirect targets" << std::endl;
+                    // Propagate to load edges
+                    int propagateCount = 0;
+                    for (auto loadEdge : dst->getOutEdges())
                     {
-                        for (auto loadEdge : consg->getConstraintNode(pointee)->getOutEdges())
+                        if (loadEdge->getEdgeKind() == SVF::ConstraintEdge::Load)
                         {
-                            if (loadEdge->getEdgeKind() == SVF::ConstraintEdge::Load)
-                            {
-                                worklist.push(loadEdge);
-                            }
+                            worklist.push(loadEdge);
+                            propagateCount++;
                         }
                     }
+                    std::cout << "  Propagated to " << propagateCount << " load edges" << std::endl;
+                }
+                else
+                {
+                    std::cout << "  No change in indirect targets" << std::endl;
                 }
                 break;
             }
@@ -188,4 +306,22 @@ void Andersen::runPointerAnalysis()
                 break;
         }
     }
+    
+    std::cout << "Pointer analysis completed in " << iteration << " iterations" << std::endl;
+    
+    // Output final PTS results for debugging
+    std::cout << "\n=== Final Points-to Sets ===" << std::endl;
+    for (const auto& entry : pts)
+    {
+        if (!entry.second.empty())
+        {
+            std::cout << "pts[" << entry.first << "] = {";
+            for (auto obj : entry.second)
+            {
+                std::cout << obj << " ";
+            }
+            std::cout << "}" << std::endl;
+        }
+    }
+    std::cout << "=== End of Results ===" << std::endl;
 }
