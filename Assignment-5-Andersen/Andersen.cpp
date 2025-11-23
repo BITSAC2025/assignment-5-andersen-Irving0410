@@ -1,8 +1,3 @@
-/**
- * Andersen.cpp
- * @author kisslune
- */
-
 #include "A5Header.h"
 
 using namespace llvm;
@@ -22,10 +17,7 @@ int main(int argc, char** argv)
     consg->dump();
 
     Andersen andersen(consg);
-
-    // TODO: complete the following method
     andersen.runPointerAnalysis();
-
     andersen.dumpResult();
     SVF::LLVMModuleSet::releaseLLVMModuleSet();
 	return 0;
@@ -36,10 +28,10 @@ void Andersen::runPointerAnalysis()
 {
     std::cout << "=== Starting Andersen Pointer Analysis ===" << std::endl;
     
-    // Initialize worklist with all constraint edges
+    // 使用所有约束边初始化工作队列
     WorkList<SVF::ConstraintEdge*> worklist;
     
-    // Add all constraint edges to worklist
+    // 将所有约束边加入工作队列
     int edgeCount = 0;
     for (auto it = consg->begin(); it != consg->end(); ++it)
     {
@@ -52,7 +44,7 @@ void Andersen::runPointerAnalysis()
     }
     std::cout << "Initial worklist size: " << edgeCount << " edges" << std::endl;
     
-    // Helper: push all outgoing edges of a node onto the worklist
+    // 辅助：将指定节点的所有出边压入工作队列
     auto pushOutEdgesFromNode = [&](unsigned nodeId) {
         SVF::ConstraintNode* n = consg->getConstraintNode(nodeId);
         if (!n) return;
@@ -60,7 +52,7 @@ void Andersen::runPointerAnalysis()
             worklist.push(e);
     };
 
-    // Process worklist until empty
+    // 处理工作队列直到为空
     int iteration = 0;
     while (!worklist.empty())
     {
@@ -73,13 +65,13 @@ void Andersen::runPointerAnalysis()
                   << src->getId() << " -> " << dst->getId() 
                   << " (Type: " << edge->getEdgeKind() << ")" << std::endl;
         
-        // Handle different types of constraints
+        // 处理不同类型的约束
         switch (edge->getEdgeKind())
         {
             case SVF::ConstraintEdge::Addr:
             {
-                // Address-of constraint: a = &b
-                // Add b to the points-to set of a
+            // 取地址约束：a = &b
+            // 将 b 加入 a 的点到集合
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
@@ -88,7 +80,6 @@ void Andersen::runPointerAnalysis()
                 if (pts[srcId].insert(dstId).second)
                 {
                     std::cout << "  Added " << dstId << " to pts[" << srcId << "]" << std::endl;
-                    // Points-to set changed, propagate from this node along all out edges
                     pushOutEdgesFromNode(srcId);
                 }
                 else
@@ -97,8 +88,8 @@ void Andersen::runPointerAnalysis()
             }
             case SVF::ConstraintEdge::Copy:
             {
-                // Copy constraint: a = b
-                // Copy points-to set from b to a
+                // 赋值拷贝约束：a = b
+                // 将 b 的点到集合合并到 a
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
@@ -130,7 +121,7 @@ void Andersen::runPointerAnalysis()
                     if (changed)
                     {
                         std::cout << "  Changed: added " << addedCount << " elements" << std::endl;
-                        // Propagate from updated node
+                        // 从已更新节点出发进行传播
                         pushOutEdgesFromNode(srcId);
                     }
                     else
@@ -140,8 +131,8 @@ void Andersen::runPointerAnalysis()
             }
             case SVF::ConstraintEdge::Load:
             {
-                // Load constraint: a = *b
-                // For each object c in b's points-to set, add c to a's points-to set
+                // Load 约束：a = *b
+                // 对 b 的每个指向对象 c，将 c 的指向对象并入 a 的点到集合
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
@@ -159,7 +150,6 @@ void Andersen::runPointerAnalysis()
 
                         for (auto pointee : pts[dstId])
                         {
-                            // Find the object that pointee points to
                             if (pts.find(pointee) != pts.end())
                             {
                                 std::cout << "  pts[" << pointee << "] = {";
@@ -187,7 +177,7 @@ void Andersen::runPointerAnalysis()
                     if (changed)
                     {
                         std::cout << "  Changed: added " << addedCount << " indirect elements" << std::endl;
-                        // Propagate from updated node
+                        // 从已更新节点出发进行传播
                         pushOutEdgesFromNode(srcId);
                     }
                     else
@@ -197,8 +187,8 @@ void Andersen::runPointerAnalysis()
             }
             case SVF::ConstraintEdge::Store:
             {
-                // Store constraint: *a = b
-                // For each object c in a's points-to set, add b's points-to set to c's points-to set
+                // Store 约束：*a = b
+                // 对 a 的每个指向对象 c，将 b 的点到集合并入 c 的点到集合
                 unsigned srcId = src->getId();
                 unsigned dstId = dst->getId();
                 
@@ -243,7 +233,7 @@ void Andersen::runPointerAnalysis()
                     if (changed)
                     {
                         std::cout << "  Changed: added " << addedCount << " elements to indirect targets" << std::endl;
-                        // Propagate from updated pointee nodes
+                        // 从被指向对象节点开始传播更新
                         for (auto pointee : pts[srcId])
                             pushOutEdgesFromNode(pointee);
                     }
@@ -259,7 +249,7 @@ void Andersen::runPointerAnalysis()
     
     std::cout << "Pointer analysis completed in " << iteration << " iterations" << std::endl;
     
-    // Output final PTS results for debugging
+    // 输出最终点到集合结果
     std::cout << "\n=== Final Points-to Sets ===" << std::endl;
     for (const auto& entry : pts)
     {
