@@ -1,0 +1,2 @@
+/usr/bin/ar qc liba4lib.a CMakeFiles/a4lib.dir/A4Lib.cpp.o
+/usr/bin/ranlib liba4lib.a

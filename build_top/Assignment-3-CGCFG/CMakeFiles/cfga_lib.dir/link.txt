@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcfga_lib.a CMakeFiles/cfga_lib.dir/cfga_lib.cpp.o
+/usr/bin/ranlib libcfga_lib.a

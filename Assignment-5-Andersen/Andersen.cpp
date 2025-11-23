@@ -52,6 +52,14 @@ void Andersen::runPointerAnalysis()
     }
     std::cout << "Initial worklist size: " << edgeCount << " edges" << std::endl;
     
+    // Helper: push all outgoing edges of a node onto the worklist
+    auto pushOutEdgesFromNode = [&](unsigned nodeId) {
+        SVF::ConstraintNode* n = consg->getConstraintNode(nodeId);
+        if (!n) return;
+        for (auto e : n->getOutEdges())
+            worklist.push(e);
+    };
+
     // Process worklist until empty
     int iteration = 0;
     while (!worklist.empty())
@@ -80,22 +88,11 @@ void Andersen::runPointerAnalysis()
                 if (pts[srcId].insert(dstId).second)
                 {
                     std::cout << "  Added " << dstId << " to pts[" << srcId << "]" << std::endl;
-                    // Points-to set changed, propagate to copy edges
-                    int copyCount = 0;
-                    for (auto copyEdge : src->getOutEdges())
-                    {
-                        if (copyEdge->getEdgeKind() == SVF::ConstraintEdge::Copy)
-                        {
-                            worklist.push(copyEdge);
-                            copyCount++;
-                        }
-                    }
-                    std::cout << "  Propagated to " << copyCount << " copy edges" << std::endl;
+                    // Points-to set changed, propagate from this node along all out edges
+                    pushOutEdgesFromNode(srcId);
                 }
                 else
-                {
                     std::cout << "  No change - " << dstId << " already in pts[" << srcId << "]" << std::endl;
-                }
                 break;
             }
             case SVF::ConstraintEdge::Copy:
@@ -107,51 +104,37 @@ void Andersen::runPointerAnalysis()
                 
                 std::cout << "  Copy constraint: " << srcId << " = " << dstId << std::endl;
                 
-                bool changed = false;
-                int addedCount = 0;
-                if (pts.find(dstId) != pts.end())
                 {
-                    std::cout << "  pts[" << dstId << "] = {";
-                    for (auto pointee : pts[dstId])
+                    bool changed = false;
+                    int addedCount = 0;
+                    if (pts.find(dstId) != pts.end())
                     {
-                        std::cout << pointee << " ";
-                    }
-                    std::cout << "}" << std::endl;
-                    
-                    for (auto pointee : pts[dstId])
-                    {
-                        if (pts[srcId].insert(pointee).second)
+                        std::cout << "  pts[" << dstId << "] = {";
+                        for (auto pointee : pts[dstId])
+                            std::cout << pointee << " ";
+                        std::cout << "}" << std::endl;
+
+                        for (auto pointee : pts[dstId])
                         {
-                            changed = true;
-                            addedCount++;
-                            std::cout << "  Added " << pointee << " to pts[" << srcId << "]" << std::endl;
+                            if (pts[srcId].insert(pointee).second)
+                            {
+                                changed = true;
+                                addedCount++;
+                                std::cout << "  Added " << pointee << " to pts[" << srcId << "]" << std::endl;
+                            }
                         }
                     }
-                }
-                else
-                {
-                    std::cout << "  pts[" << dstId << "] is empty" << std::endl;
-                }
-                
-                if (changed)
-                {
-                    std::cout << "  Changed: added " << addedCount << " elements" << std::endl;
-                    // Propagate to load and store edges
-                    int propagateCount = 0;
-                    for (auto outEdge : src->getOutEdges())
+                    else
+                        std::cout << "  pts[" << dstId << "] is empty" << std::endl;
+
+                    if (changed)
                     {
-                        if (outEdge->getEdgeKind() == SVF::ConstraintEdge::Load || 
-                            outEdge->getEdgeKind() == SVF::ConstraintEdge::Store)
-                        {
-                            worklist.push(outEdge);
-                            propagateCount++;
-                        }
+                        std::cout << "  Changed: added " << addedCount << " elements" << std::endl;
+                        // Propagate from updated node
+                        pushOutEdgesFromNode(srcId);
                     }
-                    std::cout << "  Propagated to " << propagateCount << " load/store edges" << std::endl;
-                }
-                else
-                {
-                    std::cout << "  No change in pts[" << srcId << "]" << std::endl;
+                    else
+                        std::cout << "  No change in pts[" << srcId << "]" << std::endl;
                 }
                 break;
             }
@@ -164,68 +147,51 @@ void Andersen::runPointerAnalysis()
                 
                 std::cout << "  Load constraint: " << srcId << " = *" << dstId << std::endl;
                 
-                bool changed = false;
-                int addedCount = 0;
-                if (pts.find(dstId) != pts.end())
                 {
-                    std::cout << "  pts[" << dstId << "] = {";
-                    for (auto pointee : pts[dstId])
+                    bool changed = false;
+                    int addedCount = 0;
+                    if (pts.find(dstId) != pts.end())
                     {
-                        std::cout << pointee << " ";
-                    }
-                    std::cout << "}" << std::endl;
-                    
-                    for (auto pointee : pts[dstId])
-                    {
-                        // Find the object that pointee points to
-                        if (pts.find(pointee) != pts.end())
+                        std::cout << "  pts[" << dstId << "] = {";
+                        for (auto pointee : pts[dstId])
+                            std::cout << pointee << " ";
+                        std::cout << "}" << std::endl;
+
+                        for (auto pointee : pts[dstId])
                         {
-                            std::cout << "  pts[" << pointee << "] = {";
-                            for (auto indirectPointee : pts[pointee])
+                            // Find the object that pointee points to
+                            if (pts.find(pointee) != pts.end())
                             {
-                                std::cout << indirectPointee << " ";
-                            }
-                            std::cout << "}" << std::endl;
-                            
-                            for (auto indirectPointee : pts[pointee])
-                            {
-                                if (pts[srcId].insert(indirectPointee).second)
+                                std::cout << "  pts[" << pointee << "] = {";
+                                for (auto indirectPointee : pts[pointee])
+                                    std::cout << indirectPointee << " ";
+                                std::cout << "}" << std::endl;
+
+                                for (auto indirectPointee : pts[pointee])
                                 {
-                                    changed = true;
-                                    addedCount++;
-                                    std::cout << "  Added " << indirectPointee << " to pts[" << srcId << "]" << std::endl;
+                                    if (pts[srcId].insert(indirectPointee).second)
+                                    {
+                                        changed = true;
+                                        addedCount++;
+                                        std::cout << "  Added " << indirectPointee << " to pts[" << srcId << "]" << std::endl;
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            std::cout << "  pts[" << pointee << "] is empty" << std::endl;
+                            else
+                                std::cout << "  pts[" << pointee << "] is empty" << std::endl;
                         }
                     }
-                }
-                else
-                {
-                    std::cout << "  pts[" << dstId << "] is empty" << std::endl;
-                }
-                
-                if (changed)
-                {
-                    std::cout << "  Changed: added " << addedCount << " indirect elements" << std::endl;
-                    // Propagate to copy edges
-                    int propagateCount = 0;
-                    for (auto copyEdge : src->getOutEdges())
+                    else
+                        std::cout << "  pts[" << dstId << "] is empty" << std::endl;
+
+                    if (changed)
                     {
-                        if (copyEdge->getEdgeKind() == SVF::ConstraintEdge::Copy)
-                        {
-                            worklist.push(copyEdge);
-                            propagateCount++;
-                        }
+                        std::cout << "  Changed: added " << addedCount << " indirect elements" << std::endl;
+                        // Propagate from updated node
+                        pushOutEdgesFromNode(srcId);
                     }
-                    std::cout << "  Propagated to " << propagateCount << " copy edges" << std::endl;
-                }
-                else
-                {
-                    std::cout << "  No change in pts[" << srcId << "]" << std::endl;
+                    else
+                        std::cout << "  No change in pts[" << srcId << "]" << std::endl;
                 }
                 break;
             }
@@ -238,67 +204,51 @@ void Andersen::runPointerAnalysis()
                 
                 std::cout << "  Store constraint: *" << srcId << " = " << dstId << std::endl;
                 
-                bool changed = false;
-                int addedCount = 0;
-                if (pts.find(srcId) != pts.end())
                 {
-                    std::cout << "  pts[" << srcId << "] = {";
-                    for (auto pointee : pts[srcId])
+                    bool changed = false;
+                    int addedCount = 0;
+                    if (pts.find(srcId) != pts.end())
                     {
-                        std::cout << pointee << " ";
-                    }
-                    std::cout << "}" << std::endl;
-                    
-                    for (auto pointee : pts[srcId])
-                    {
-                        if (pts.find(dstId) != pts.end())
+                        std::cout << "  pts[" << srcId << "] = {";
+                        for (auto pointee : pts[srcId])
+                            std::cout << pointee << " ";
+                        std::cout << "}" << std::endl;
+
+                        for (auto pointee : pts[srcId])
                         {
-                            std::cout << "  pts[" << dstId << "] = {";
-                            for (auto targetPointee : pts[dstId])
+                            if (pts.find(dstId) != pts.end())
                             {
-                                std::cout << targetPointee << " ";
-                            }
-                            std::cout << "}" << std::endl;
-                            
-                            for (auto targetPointee : pts[dstId])
-                            {
-                                if (pts[pointee].insert(targetPointee).second)
+                                std::cout << "  pts[" << dstId << "] = {";
+                                for (auto targetPointee : pts[dstId])
+                                    std::cout << targetPointee << " ";
+                                std::cout << "}" << std::endl;
+
+                                for (auto targetPointee : pts[dstId])
                                 {
-                                    changed = true;
-                                    addedCount++;
-                                    std::cout << "  Added " << targetPointee << " to pts[" << pointee << "]" << std::endl;
+                                    if (pts[pointee].insert(targetPointee).second)
+                                    {
+                                        changed = true;
+                                        addedCount++;
+                                        std::cout << "  Added " << targetPointee << " to pts[" << pointee << "]" << std::endl;
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            std::cout << "  pts[" << dstId << "] is empty" << std::endl;
+                            else
+                                std::cout << "  pts[" << dstId << "] is empty" << std::endl;
                         }
                     }
-                }
-                else
-                {
-                    std::cout << "  pts[" << srcId << "] is empty" << std::endl;
-                }
-                
-                if (changed)
-                {
-                    std::cout << "  Changed: added " << addedCount << " elements to indirect targets" << std::endl;
-                    // Propagate to load edges
-                    int propagateCount = 0;
-                    for (auto loadEdge : dst->getOutEdges())
+                    else
+                        std::cout << "  pts[" << srcId << "] is empty" << std::endl;
+
+                    if (changed)
                     {
-                        if (loadEdge->getEdgeKind() == SVF::ConstraintEdge::Load)
-                        {
-                            worklist.push(loadEdge);
-                            propagateCount++;
-                        }
+                        std::cout << "  Changed: added " << addedCount << " elements to indirect targets" << std::endl;
+                        // Propagate from updated pointee nodes
+                        for (auto pointee : pts[srcId])
+                            pushOutEdgesFromNode(pointee);
                     }
-                    std::cout << "  Propagated to " << propagateCount << " load edges" << std::endl;
-                }
-                else
-                {
-                    std::cout << "  No change in indirect targets" << std::endl;
+                    else
+                        std::cout << "  No change in indirect targets" << std::endl;
                 }
                 break;
             }

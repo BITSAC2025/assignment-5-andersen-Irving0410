@@ -1,0 +1,2 @@
+/usr/bin/ar qc liba5lib.a CMakeFiles/a5lib.dir/A5Lib.cpp.o
+/usr/bin/ranlib liba5lib.a
