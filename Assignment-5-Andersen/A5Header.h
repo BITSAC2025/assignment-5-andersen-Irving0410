@@ -1,35 +1,30 @@
-/**
- * A5Header.h
- * @author kisslune 
- */
-
 #ifndef ANSWERS_A5HEADER_H
 #define ANSWERS_A5HEADER_H
 
 #include "SVF-LLVM/SVFIRBuilder.h"
 
-/// Point-to set
+/// 点到集合
 using PTS = std::map<unsigned, std::set<unsigned>>;
 
 /**
- * FIFO worklist
+ * FIFO 工作列表
  */
 template<class T>
 class WorkList
 {
 public:
-    /// Check whether the worklist is empty.
+    /// 检查工作列表是否为空。
     inline bool empty() const
     { return data_list.empty(); }
 
-    /// Clear the worklist
+    /// 清空工作列表
     inline void clear()
     {
         data_list.clear();
         data_set.clear();
     }
 
-    /// Push a data into the END work list.
+    /// 将数据推入队列末尾
     inline bool push(const T &data)
     {
         if (this->data_set.find(data) == data_set.end())
@@ -42,7 +37,7 @@ public:
             return false;
     }
 
-    /// Pop a data from the FRONT of work list.
+    /// 从队列头部弹出数据
     inline T pop()
     {
         assert(!this->empty() && "work list is empty");
@@ -53,12 +48,12 @@ public:
     }
 
 protected:
-    std::unordered_set<T> data_set;       ///< to avoid duplicate elements
-    std::deque<T> data_list;     ///< to access the elements at both the beginning and the end
+    std::unordered_set<T> data_set;       ///< 避免重复元素
+    std::deque<T> data_list;     ///< 可在队首和队尾访问元素
 };
 
 
-/// The Andersen solver
+/// Andersen 求解器
 class Andersen
 {
 public:
@@ -66,9 +61,9 @@ public:
             consg(consg)
     {}
 
-    /// Run pointer analysis
+    /// 运行指针分析
     void runPointerAnalysis();
-    /// Dump results into a file
+    /// 将结果输出到文件
     void dumpResult();
 
 protected:

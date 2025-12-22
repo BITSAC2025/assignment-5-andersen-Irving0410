@@ -3,11 +3,106 @@
 using namespace llvm;
 using namespace std;
 
-int main(int argc, char** argv)
+void Andersen::runPointerAnalysis()
 {
-    auto moduleNameVec =
-            OptionBase::parseOptions(argc, argv, "Whole Program Points-to Analysis",
-                                     "[options] <input-bitcode...>");
+    // 点到集和工作列表在 A5Header.h 中定义。
+    //  约束图的实现由 SVF 库提供。
+    WorkList<unsigned> workList;
+
+    auto scheduleCopyEdge = [&](unsigned src, unsigned dst) {
+        SVF::ConstraintNode *dstNode = consg->getConstraintNode(dst);
+        bool exists = false;
+
+        if (dstNode != nullptr) {
+            for (auto *e : dstNode->getCopyInEdges()) {
+                if (e->getSrcID() == src) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+
+        if (!exists) {
+            consg->addCopyCGEdge(src, dst);
+            workList.push(src);
+        }
+    };
+
+    // 初始化：把 addr 边上的对象加入点到集并入队
+    for (auto it = consg->begin(); it != consg->end(); ++it) {
+        const unsigned nid = it->first;
+        SVF::ConstraintNode *node = it->second;
+
+        for (auto *e : node->getAddrInEdges()) {
+            auto *addrEdge = SVF::SVFUtil::dyn_cast<SVF::AddrCGEdge>(e);
+            const unsigned srcId = addrEdge->getSrcID();
+            auto &pointSet = pts[nid];
+
+            if (pointSet.insert(srcId).second) {
+                workList.push(nid);
+            }
+        }
+    }
+
+    while (!workList.empty()) {
+        const unsigned curId = workList.pop();
+        SVF::ConstraintNode *curNode = consg->getConstraintNode(curId);
+        auto &curPts = pts[curId];
+
+        // 对当前点到集中的每个对象，调度 store/load 引起的 copy
+        for (auto obj : curPts) {
+            for (auto *se : curNode->getStoreInEdges()) {
+                auto *storeEdge = SVF::SVFUtil::dyn_cast<SVF::StoreCGEdge>(se);
+                scheduleCopyEdge(storeEdge->getSrcID(), obj);
+            }
+
+            for (auto *le : curNode->getLoadOutEdges()) {
+                auto *loadEdge = SVF::SVFUtil::dyn_cast<SVF::LoadCGEdge>(le);
+                scheduleCopyEdge(obj, loadEdge->getDstID());
+            }
+        }
+
+        // 处理 copy 边：把 curPts 并入目标点到集
+        for (auto *ce : curNode->getCopyOutEdges()) {
+            auto *copyEdge = SVF::SVFUtil::dyn_cast<SVF::CopyCGEdge>(ce);
+            const unsigned dstId = copyEdge->getDstID();
+            auto &dstPts = pts[dstId];
+            bool changed = false;
+
+            for (auto obj : curPts) {
+                changed |= dstPts.insert(obj).second;
+            }
+
+            if (changed) {
+                workList.push(dstId);
+            }
+        }
+
+        // 处理 gep 边：把带字段偏移的对象并入目标点到集
+        for (auto *ge : curNode->getGepOutEdges()) {
+            auto *gepEdge = SVF::SVFUtil::dyn_cast<SVF::GepCGEdge>(ge);
+            const unsigned dstId = gepEdge->getDstID();
+            auto &dstPts = pts[dstId];
+            bool changed = false;
+
+            for (auto obj : curPts) {
+                const unsigned fieldObj = consg->getGepObjVar(obj, gepEdge);
+                changed |= dstPts.insert(fieldObj).second;
+            }
+
+            if (changed) {
+                workList.push(dstId);
+            }
+        }
+    }
+}
+
+
+int main(int argc, char **argv)
+{
+    auto moduleNameVec = OptionBase::parseOptions(
+            argc, argv, "Whole Program Points-to Analysis",
+            "[options] <input-bitcode...>");
 
     SVF::LLVMModuleSet::buildSVFModule(moduleNameVec);
 
@@ -17,251 +112,10 @@ int main(int argc, char** argv)
     consg->dump();
 
     Andersen andersen(consg);
+
     andersen.runPointerAnalysis();
     andersen.dumpResult();
+
     SVF::LLVMModuleSet::releaseLLVMModuleSet();
-	return 0;
-}
-
-
-void Andersen::runPointerAnalysis()
-{
-    std::cout << "=== Starting Andersen Pointer Analysis ===" << std::endl;
-    
-    // 使用所有约束边初始化工作队列
-    WorkList<SVF::ConstraintEdge*> worklist;
-    
-    // 将所有约束边加入工作队列
-    int edgeCount = 0;
-    for (auto it = consg->begin(); it != consg->end(); ++it)
-    {
-        SVF::ConstraintNode* node = it->second;
-        for (auto edge : node->getOutEdges())
-        {
-            worklist.push(edge);
-            edgeCount++;
-        }
-    }
-    std::cout << "Initial worklist size: " << edgeCount << " edges" << std::endl;
-    
-    // 辅助：将指定节点的所有出边压入工作队列
-    auto pushOutEdgesFromNode = [&](unsigned nodeId) {
-        SVF::ConstraintNode* n = consg->getConstraintNode(nodeId);
-        if (!n) return;
-        for (auto e : n->getOutEdges())
-            worklist.push(e);
-    };
-
-    // 处理工作队列直到为空
-    int iteration = 0;
-    while (!worklist.empty())
-    {
-        iteration++;
-        SVF::ConstraintEdge* edge = worklist.pop();
-        SVF::ConstraintNode* src = edge->getSrcNode();
-        SVF::ConstraintNode* dst = edge->getDstNode();
-        
-        std::cout << "\n[Iteration " << iteration << "] Processing edge: " 
-                  << src->getId() << " -> " << dst->getId() 
-                  << " (Type: " << edge->getEdgeKind() << ")" << std::endl;
-        
-        // 处理不同类型的约束
-        switch (edge->getEdgeKind())
-        {
-            case SVF::ConstraintEdge::Addr:
-            {
-            // 取地址约束：a = &b
-            // 将 b 加入 a 的点到集合
-                unsigned srcId = src->getId();
-                unsigned dstId = dst->getId();
-                
-                std::cout << "  Address-of constraint: " << srcId << " = &" << dstId << std::endl;
-                
-                if (pts[srcId].insert(dstId).second)
-                {
-                    std::cout << "  Added " << dstId << " to pts[" << srcId << "]" << std::endl;
-                    pushOutEdgesFromNode(srcId);
-                }
-                else
-                    std::cout << "  No change - " << dstId << " already in pts[" << srcId << "]" << std::endl;
-                break;
-            }
-            case SVF::ConstraintEdge::Copy:
-            {
-                // 赋值拷贝约束：a = b
-                // 将 b 的点到集合合并到 a
-                unsigned srcId = src->getId();
-                unsigned dstId = dst->getId();
-                
-                std::cout << "  Copy constraint: " << srcId << " = " << dstId << std::endl;
-                
-                {
-                    bool changed = false;
-                    int addedCount = 0;
-                    if (pts.find(dstId) != pts.end())
-                    {
-                        std::cout << "  pts[" << dstId << "] = {";
-                        for (auto pointee : pts[dstId])
-                            std::cout << pointee << " ";
-                        std::cout << "}" << std::endl;
-
-                        for (auto pointee : pts[dstId])
-                        {
-                            if (pts[srcId].insert(pointee).second)
-                            {
-                                changed = true;
-                                addedCount++;
-                                std::cout << "  Added " << pointee << " to pts[" << srcId << "]" << std::endl;
-                            }
-                        }
-                    }
-                    else
-                        std::cout << "  pts[" << dstId << "] is empty" << std::endl;
-
-                    if (changed)
-                    {
-                        std::cout << "  Changed: added " << addedCount << " elements" << std::endl;
-                        // 从已更新节点出发进行传播
-                        pushOutEdgesFromNode(srcId);
-                    }
-                    else
-                        std::cout << "  No change in pts[" << srcId << "]" << std::endl;
-                }
-                break;
-            }
-            case SVF::ConstraintEdge::Load:
-            {
-                // Load 约束：a = *b
-                // 对 b 的每个指向对象 c，将 c 的指向对象并入 a 的点到集合
-                unsigned srcId = src->getId();
-                unsigned dstId = dst->getId();
-                
-                std::cout << "  Load constraint: " << srcId << " = *" << dstId << std::endl;
-                
-                {
-                    bool changed = false;
-                    int addedCount = 0;
-                    if (pts.find(dstId) != pts.end())
-                    {
-                        std::cout << "  pts[" << dstId << "] = {";
-                        for (auto pointee : pts[dstId])
-                            std::cout << pointee << " ";
-                        std::cout << "}" << std::endl;
-
-                        for (auto pointee : pts[dstId])
-                        {
-                            if (pts.find(pointee) != pts.end())
-                            {
-                                std::cout << "  pts[" << pointee << "] = {";
-                                for (auto indirectPointee : pts[pointee])
-                                    std::cout << indirectPointee << " ";
-                                std::cout << "}" << std::endl;
-
-                                for (auto indirectPointee : pts[pointee])
-                                {
-                                    if (pts[srcId].insert(indirectPointee).second)
-                                    {
-                                        changed = true;
-                                        addedCount++;
-                                        std::cout << "  Added " << indirectPointee << " to pts[" << srcId << "]" << std::endl;
-                                    }
-                                }
-                            }
-                            else
-                                std::cout << "  pts[" << pointee << "] is empty" << std::endl;
-                        }
-                    }
-                    else
-                        std::cout << "  pts[" << dstId << "] is empty" << std::endl;
-
-                    if (changed)
-                    {
-                        std::cout << "  Changed: added " << addedCount << " indirect elements" << std::endl;
-                        // 从已更新节点出发进行传播
-                        pushOutEdgesFromNode(srcId);
-                    }
-                    else
-                        std::cout << "  No change in pts[" << srcId << "]" << std::endl;
-                }
-                break;
-            }
-            case SVF::ConstraintEdge::Store:
-            {
-                // Store 约束：*a = b
-                // 对 a 的每个指向对象 c，将 b 的点到集合并入 c 的点到集合
-                unsigned srcId = src->getId();
-                unsigned dstId = dst->getId();
-                
-                std::cout << "  Store constraint: *" << srcId << " = " << dstId << std::endl;
-                
-                {
-                    bool changed = false;
-                    int addedCount = 0;
-                    if (pts.find(srcId) != pts.end())
-                    {
-                        std::cout << "  pts[" << srcId << "] = {";
-                        for (auto pointee : pts[srcId])
-                            std::cout << pointee << " ";
-                        std::cout << "}" << std::endl;
-
-                        for (auto pointee : pts[srcId])
-                        {
-                            if (pts.find(dstId) != pts.end())
-                            {
-                                std::cout << "  pts[" << dstId << "] = {";
-                                for (auto targetPointee : pts[dstId])
-                                    std::cout << targetPointee << " ";
-                                std::cout << "}" << std::endl;
-
-                                for (auto targetPointee : pts[dstId])
-                                {
-                                    if (pts[pointee].insert(targetPointee).second)
-                                    {
-                                        changed = true;
-                                        addedCount++;
-                                        std::cout << "  Added " << targetPointee << " to pts[" << pointee << "]" << std::endl;
-                                    }
-                                }
-                            }
-                            else
-                                std::cout << "  pts[" << dstId << "] is empty" << std::endl;
-                        }
-                    }
-                    else
-                        std::cout << "  pts[" << srcId << "] is empty" << std::endl;
-
-                    if (changed)
-                    {
-                        std::cout << "  Changed: added " << addedCount << " elements to indirect targets" << std::endl;
-                        // 从被指向对象节点开始传播更新
-                        for (auto pointee : pts[srcId])
-                            pushOutEdgesFromNode(pointee);
-                    }
-                    else
-                        std::cout << "  No change in indirect targets" << std::endl;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-    
-    std::cout << "Pointer analysis completed in " << iteration << " iterations" << std::endl;
-    
-    // 输出最终点到集合结果
-    std::cout << "\n=== Final Points-to Sets ===" << std::endl;
-    for (const auto& entry : pts)
-    {
-        if (!entry.second.empty())
-        {
-            std::cout << "pts[" << entry.first << "] = {";
-            for (auto obj : entry.second)
-            {
-                std::cout << obj << " ";
-            }
-            std::cout << "}" << std::endl;
-        }
-    }
-    std::cout << "=== End of Results ===" << std::endl;
+    return 0;
 }
